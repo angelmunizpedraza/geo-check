@@ -9,20 +9,60 @@ import requests
 
 USER_AGENT = "geo-check/1.0 (+https://github.com/angelmunizpedraza/geo-check)"
 
-# Rastreadores de IA relevantes en 2026 y quién los opera.
-# Bloquearlos en robots.txt significa no aparecer en sus respuestas.
+# Rastreadores de IA relevantes en 2026, agrupados por el motor al que alimentan.
+#
+# La distinción que importa: un bot de CITA recupera la página en el momento de
+# responder y es el que puede citarte; un bot de ENTRENAMIENTO solo alimenta el
+# modelo. Bloquear GPTBot (entrenamiento de OpenAI) y bloquear Google-Extended
+# (AI Overviews) son dos problemas distintos y no deben promediarse en una cifra.
+#
+# peso = importancia del motor para la visibilidad en respuestas de IA (suma 25).
+MOTORES: dict[str, dict] = {
+    "ChatGPT (OpenAI)": {
+        "peso": 8,
+        "bots": {
+            "OAI-SearchBot": "cita",           # índice de búsqueda de ChatGPT
+            "ChatGPT-User": "cita",            # navegación en tiempo real
+            "GPTBot": "entrenamiento",
+        },
+    },
+    "Google AI Overviews / Gemini": {
+        "peso": 6,
+        "bots": {
+            "Google-Extended": "entrenamiento",  # controla el uso en Gemini y AI Overviews
+        },
+    },
+    "Perplexity": {
+        "peso": 5,
+        "bots": {
+            "PerplexityBot": "cita",
+        },
+    },
+    "Claude (Anthropic)": {
+        "peso": 3,
+        "bots": {
+            "Claude-SearchBot": "cita",
+            "ClaudeBot": "entrenamiento",
+            "anthropic-ai": "entrenamiento",
+        },
+    },
+    "Apple Intelligence": {"peso": 1, "bots": {"Applebot-Extended": "entrenamiento"}},
+    "Meta AI": {"peso": 1, "bots": {"meta-externalagent": "entrenamiento"}},
+    "Common Crawl (base de muchos modelos)": {"peso": 1, "bots": {"CCBot": "entrenamiento"}},
+}
+
+# bot -> operador (mantiene la interfaz anterior)
 BOTS_IA = {
-    "GPTBot": "OpenAI (entrenamiento)",
-    "OAI-SearchBot": "OpenAI (búsqueda en ChatGPT)",
-    "ChatGPT-User": "OpenAI (navegación en tiempo real)",
-    "ClaudeBot": "Anthropic",
-    "anthropic-ai": "Anthropic (legado)",
-    "PerplexityBot": "Perplexity",
-    "Google-Extended": "Google (Gemini / AI Overviews)",
-    "Applebot-Extended": "Apple Intelligence",
-    "CCBot": "Common Crawl (base de muchos modelos)",
-    "Bytespider": "ByteDance",
-    "meta-externalagent": "Meta AI",
+    bot: motor
+    for motor, cfg in MOTORES.items()
+    for bot in cfg["bots"]
+}
+
+# bot -> "cita" | "entrenamiento"
+ROL_BOT = {
+    bot: rol
+    for cfg in MOTORES.values()
+    for bot, rol in cfg["bots"].items()
 }
 
 
@@ -40,6 +80,48 @@ class Recurso:
 
 
 @dataclass
+class AccesoMotor:
+    """Acceso de un motor concreto, separando bots de cita y de entrenamiento."""
+
+    motor: str
+    peso: int
+    bloqueados: dict[str, str] = field(default_factory=dict)   # bot -> rol
+    permitidos: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def bots_cita(self) -> list[str]:
+        return [b for b, rol in {**self.permitidos, **self.bloqueados}.items() if rol == "cita"]
+
+    @property
+    def cita_bloqueada(self) -> bool:
+        """No puede citarte: todos sus bots de recuperación en vivo están bloqueados."""
+        cita = self.bots_cita
+        return bool(cita) and all(b in self.bloqueados for b in cita)
+
+    @property
+    def estado(self) -> str:
+        if not self.bloqueados:
+            return "abierto"
+        if not self.permitidos:
+            return "bloqueado"
+        return "parcial"
+
+    @property
+    def puntos(self) -> float:
+        """Del peso del motor: 0 si está cerrado, la mitad si solo entra a entrenar."""
+        if not self.bloqueados:
+            return float(self.peso)
+        if not self.permitidos:
+            return 0.0
+        # Los bots de cita valen el doble que los de entrenamiento dentro del motor.
+        def valor(bot: str, rol: str) -> int:
+            return 2 if rol == "cita" else 1
+        total = sum(valor(b, r) for b, r in {**self.permitidos, **self.bloqueados}.items())
+        abierto = sum(valor(b, r) for b, r in self.permitidos.items())
+        return round(self.peso * abierto / total, 2) if total else 0.0
+
+
+@dataclass
 class AccesoBots:
     """Resultado de leer robots.txt desde el punto de vista de los bots de IA."""
 
@@ -47,6 +129,17 @@ class AccesoBots:
     bloqueados: dict[str, str] = field(default_factory=dict)   # bot -> operador
     permitidos: dict[str, str] = field(default_factory=dict)
     bloqueo_total: bool = False  # User-agent: * / Disallow: /
+    motores: dict[str, AccesoMotor] = field(default_factory=dict)
+
+    @property
+    def puntos_acceso(self) -> int:
+        """0-25 ponderado por motor, no por número de bots."""
+        return round(sum(m.puntos for m in self.motores.values()))
+
+    @property
+    def motores_sin_cita(self) -> list[str]:
+        """Motores que directamente no pueden citarte."""
+        return [n for n, m in self.motores.items() if m.cita_bloqueada]
 
 
 class Fetcher:
@@ -114,11 +207,16 @@ def analizar_robots(texto: str) -> AccesoBots:
     bloqueo_total = bloquea_todo(comodin) if comodin else False
 
     resultado = AccesoBots(existe=True, bloqueo_total=bloqueo_total)
-    for bot, operador in BOTS_IA.items():
-        propio = next((d for a, d in grupos if bot.lower() in a), None)
-        if propio is not None:
-            bloqueado = bloquea_todo(propio)
-        else:
-            bloqueado = bloqueo_total
-        (resultado.bloqueados if bloqueado else resultado.permitidos)[bot] = operador
+    for motor, cfg in MOTORES.items():
+        am = AccesoMotor(motor=motor, peso=cfg["peso"])
+        for bot, rol in cfg["bots"].items():
+            propio = next((d for a, d in grupos if bot.lower() in a), None)
+            bloqueado = bloquea_todo(propio) if propio is not None else bloqueo_total
+            if bloqueado:
+                am.bloqueados[bot] = rol
+                resultado.bloqueados[bot] = motor
+            else:
+                am.permitidos[bot] = rol
+                resultado.permitidos[bot] = motor
+        resultado.motores[motor] = am
     return resultado

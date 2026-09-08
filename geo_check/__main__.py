@@ -57,7 +57,10 @@ def ejecutar(base_url: str, urls_extra: list[str], quiet: bool = False) -> dict:
 
     # 4. Puntuación global
     media_paginas = round(sum(p.puntuacion for p in paginas) / len(paginas)) if paginas else 0
-    pts_acceso = 0 if acceso.bloqueo_total else (25 if len(acceso.bloqueados) <= 2 else 12)
+    # El acceso se pondera por motor (no por número de bots): perder ChatGPT no
+    # es lo mismo que perder Common Crawl, y un bot de cita pesa el doble que
+    # uno de entrenamiento dentro de su motor.
+    pts_acceso = 25 if not acceso.existe else acceso.puntos_acceso
     pts_llms = 20 if llms.valido else (8 if llms.existe else 0)
     salida["puntuacion"] = {
         "acceso_bots": pts_acceso,       # de 25
@@ -65,6 +68,18 @@ def ejecutar(base_url: str, urls_extra: list[str], quiet: bool = False) -> dict:
         "paginas": round(media_paginas * 0.55),  # de 55
     }
     salida["puntuacion"]["total"] = sum(salida["puntuacion"].values())
+    salida["acceso_por_motor"] = {
+        n: {
+            "peso": m.peso,
+            "puntos": m.puntos,
+            "estado": m.estado,
+            "puede_citarte": not m.cita_bloqueada,
+            "bloqueados": m.bloqueados,
+            "permitidos": m.permitidos,
+        }
+        for n, m in acceso.motores.items()
+    }
+    salida["motores_que_no_pueden_citarte"] = acceso.motores_sin_cita
 
     if not quiet:
         imprimir(salida, acceso, llms, paginas)
@@ -82,17 +97,23 @@ def imprimir(salida: dict, acceso, llms, paginas: list[AnalisisPagina]) -> None:
     print(f"  llms.txt            {p['llms_txt']:>3}/20")
     print(f"  Páginas             {p['paginas']:>3}/55")
 
-    print("\n── Rastreadores de IA (robots.txt) ──")
+    print("\n── Acceso por motor (robots.txt) ──")
     if not acceso.existe:
         print("  Sin robots.txt: todos los bots pueden entrar (y también los que no quieres).")
-    elif acceso.bloqueo_total:
-        print("  BLOQUEO TOTAL: 'User-agent: *' con 'Disallow: /'. Ningún modelo verá el sitio.")
     else:
-        if acceso.bloqueados:
-            print("  Bloqueados:")
-            for bot, op in acceso.bloqueados.items():
-                print(f"    ✗ {bot:<20} {op}")
-        print(f"  Permitidos: {len(acceso.permitidos)} de {len(BOTS_IA)}")
+        if acceso.bloqueo_total:
+            print("  'User-agent: *' con 'Disallow: /': el bloqueo por defecto afecta a todos los que no tengan regla propia.")
+        print(f"  {'Motor':<38} {'Estado':<10} {'¿Puede citarte?':<16} Puntos")
+        for nombre, m in acceso.motores.items():
+            icono = {"abierto": "✓", "parcial": "~", "bloqueado": "✗"}[m.estado]
+            cita = "sí" if not m.cita_bloqueada else "NO"
+            print(f"  {icono} {nombre:<36} {m.estado:<10} {cita:<16} {m.puntos:g}/{m.peso}")
+            for bot, rol in m.bloqueados.items():
+                print(f"      ✗ {bot} ({rol})")
+        sin_cita = acceso.motores_sin_cita
+        if sin_cita:
+            print(f"\n  ⚠ No pueden citarte: {', '.join(sin_cita)}.")
+            print("    Sus bots de recuperación en vivo están bloqueados; el contenido no llega a la respuesta.")
 
     print("\n── llms.txt ──")
     if not llms.existe:

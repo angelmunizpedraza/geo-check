@@ -185,5 +185,67 @@ def test_scripts_no_cuentan_como_texto():
     assert a.palabras < 10
 
 
+# ── Desglose por motor (v0.2): bloquear GPTBot y bloquear Google-Extended
+# ── son problemas distintos y no deben promediarse en una sola cifra.
+
+def test_motores_separan_chatgpt_de_google():
+    r = analizar_robots("User-agent: GPTBot\nDisallow: /\n")
+    chatgpt = r.motores["ChatGPT (OpenAI)"]
+    google = r.motores["Google AI Overviews / Gemini"]
+    assert chatgpt.estado == "parcial" and "GPTBot" in chatgpt.bloqueados
+    assert google.estado == "abierto"
+    # ChatGPT pierde puntos, Google conserva los suyos íntegros
+    assert chatgpt.puntos < chatgpt.peso and google.puntos == google.peso
+
+
+def test_bloquear_entrenamiento_no_impide_la_cita():
+    """GPTBot bloqueado pero OAI-SearchBot permitido: ChatGPT todavía puede citarte."""
+    r = analizar_robots("User-agent: GPTBot\nDisallow: /\n")
+    assert r.motores["ChatGPT (OpenAI)"].cita_bloqueada is False
+    assert r.motores_sin_cita == []
+
+
+def test_bloquear_los_bots_de_cita_si_lo_impide():
+    txt = "User-agent: OAI-SearchBot\nDisallow: /\n\nUser-agent: ChatGPT-User\nDisallow: /\n"
+    r = analizar_robots(txt)
+    assert r.motores["ChatGPT (OpenAI)"].cita_bloqueada is True
+    assert "ChatGPT (OpenAI)" in r.motores_sin_cita
+    # pero el entrenamiento sigue abierto: no es un bloqueo total
+    assert r.motores["ChatGPT (OpenAI)"].estado == "parcial"
+
+
+def test_perplexity_bloqueado_no_puede_citarte():
+    r = analizar_robots("User-agent: PerplexityBot\nDisallow: /\n")
+    assert r.motores["Perplexity"].estado == "bloqueado"
+    assert r.motores["Perplexity"].puntos == 0
+    assert "Perplexity" in r.motores_sin_cita
+
+
+def test_puntuacion_de_acceso_pondera_por_motor_no_por_numero_de_bots():
+    """Bloquear ChatGPT entero (3 bots, peso 8) duele más que bloquear 3 motores menores (peso 1 c/u)."""
+    solo_chatgpt = analizar_robots(
+        "User-agent: GPTBot\nUser-agent: OAI-SearchBot\nUser-agent: ChatGPT-User\nDisallow: /\n"
+    )
+    tres_menores = analizar_robots(
+        "User-agent: Applebot-Extended\nUser-agent: meta-externalagent\nUser-agent: CCBot\nDisallow: /\n"
+    )
+    assert len(solo_chatgpt.bloqueados) == len(tres_menores.bloqueados) == 3
+    assert solo_chatgpt.puntos_acceso < tres_menores.puntos_acceso
+    assert solo_chatgpt.puntos_acceso == 25 - 8 and tres_menores.puntos_acceso == 25 - 3
+
+
+def test_sin_bloqueos_puntuacion_maxima_y_bloqueo_total_cero():
+    assert analizar_robots("User-agent: *\nAllow: /\n").puntos_acceso == 25
+    total = analizar_robots("User-agent: *\nDisallow: /\n")
+    assert total.puntos_acceso == 0 and len(total.motores_sin_cita) == 3  # ChatGPT, Perplexity, Claude
+
+
+def test_regla_propia_gana_al_comodin_en_el_desglose():
+    txt = "User-agent: *\nDisallow: /\n\nUser-agent: PerplexityBot\nAllow: /\n"
+    r = analizar_robots(txt)
+    assert r.motores["Perplexity"].estado == "abierto"
+    assert "Perplexity" not in r.motores_sin_cita
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

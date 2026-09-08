@@ -29,23 +29,42 @@ python -m geo_check https://ejemplo.com https://ejemplo.com/cursos https://ejemp
 
 ## Qué comprueba
 
-### 1. Acceso de los rastreadores de IA (25 puntos)
+### 1. Acceso de los rastreadores de IA (25 puntos, desglosados por motor)
 
-Lee `robots.txt` y comprueba, bot a bot, si está bloqueado:
+Lee `robots.txt` y evalúa el acceso **motor a motor**, no como una cifra única.
+Bloquear `GPTBot` y bloquear `Google-Extended` son dos problemas distintos: si se
+promedian, no sabes cuál te está costando la visibilidad.
 
-| Bot | Quién lo usa |
-|---|---|
-| `GPTBot`, `OAI-SearchBot`, `ChatGPT-User` | OpenAI: entrenamiento, búsqueda y navegación |
-| `ClaudeBot` | Anthropic |
-| `PerplexityBot` | Perplexity |
-| `Google-Extended` | Google Gemini y AI Overviews |
-| `Applebot-Extended` | Apple Intelligence |
-| `CCBot` | Common Crawl, base de datos de muchos modelos |
-| `Bytespider`, `meta-externalagent` | ByteDance, Meta |
+Dentro de cada motor se distingue el papel de cada bot:
+
+- **Bot de cita**: recupera la página en el momento de responder. Si lo bloqueas,
+  ese motor no puede citarte, por muy bien que esté tu contenido.
+- **Bot de entrenamiento**: alimenta el modelo. Bloquearlo tiene consecuencias a
+  largo plazo, pero no te saca de la respuesta de hoy.
+
+| Motor | Peso | Bots de cita | Bots de entrenamiento |
+|---|---:|---|---|
+| ChatGPT (OpenAI) | 8 | `OAI-SearchBot`, `ChatGPT-User` | `GPTBot` |
+| Google AI Overviews / Gemini | 6 | — | `Google-Extended` |
+| Perplexity | 5 | `PerplexityBot` | — |
+| Claude (Anthropic) | 3 | `Claude-SearchBot` | `ClaudeBot`, `anthropic-ai` |
+| Apple Intelligence | 1 | — | `Applebot-Extended` |
+| Meta AI | 1 | — | `meta-externalagent` |
+| Common Crawl | 1 | — | `CCBot` |
+
+Los 25 puntos se reparten por ese peso, y dentro de cada motor un bot de cita vale
+el doble que uno de entrenamiento. Consecuencia práctica: bloquear los tres bots de
+OpenAI cuesta 8 puntos y bloquear tres motores menores cuesta 3, aunque en ambos
+casos sean "tres bots bloqueados".
+
+La salida marca aparte los motores que **directamente no pueden citarte** (todos
+sus bots de recuperación en vivo bloqueados), que es el fallo caro y el que suele
+pasar inadvertido.
 
 Mucha gente bloqueó `GPTBot` en 2023 por miedo al entrenamiento y hoy no aparece en
-ChatGPT Search. La herramienta te dice exactamente qué has bloqueado y a quién
-pertenece.
+ChatGPT Search. Con el desglose se ve la diferencia: si bloqueaste solo `GPTBot`,
+ChatGPT todavía puede citarte a través de `OAI-SearchBot`; si bloqueaste también
+ese, estás fuera.
 
 El análisis respeta la lógica real de `robots.txt`: grupos con varios agentes,
 excepciones a un bloqueo global (`User-agent: *` / `Disallow: /` más un
@@ -85,17 +104,25 @@ concreta, no páginas enteras.
 GEO CHECK · https://ejemplo.com
 ====================================================================
 
-Puntuación global  ████████████░░░░░░░░  61/100
-  Acceso de bots IA    12/25
+Puntuación global  █████████████░░░░░░░  67/100
+  Acceso de bots IA    18/25
   llms.txt              0/20
   Páginas              49/55
 
-── Rastreadores de IA (robots.txt) ──
-  Bloqueados:
-    ✗ GPTBot               OpenAI (entrenamiento)
-    ✗ OAI-SearchBot        OpenAI (búsqueda en ChatGPT)
-    ✗ ClaudeBot            Anthropic
-  Permitidos: 8 de 11
+── Acceso por motor (robots.txt) ──
+  Motor                                  Estado     ¿Puede citarte?  Puntos
+  ~ ChatGPT (OpenAI)                     parcial    sí               6.4/8
+      ✗ GPTBot (entrenamiento)
+  ✓ Google AI Overviews / Gemini         abierto    sí               6/6
+  ✗ Perplexity                           bloqueado  NO               0/5
+      ✗ PerplexityBot (cita)
+  ✓ Claude (Anthropic)                   abierto    sí               3/3
+  ✓ Apple Intelligence                   abierto    sí               1/1
+  ✓ Meta AI                              abierto    sí               1/1
+  ✓ Common Crawl                         abierto    sí               1/1
+
+  ⚠ No pueden citarte: Perplexity.
+    Sus bots de recuperación en vivo están bloqueados; el contenido no llega a la respuesta.
 
 ── llms.txt ──
   No existe. Es el primer archivo que un modelo busca para orientarse en el sitio.
@@ -114,7 +141,11 @@ Puntuación global  ████████████░░░░░░░░
 from geo_check import analizar_robots, validar_llms, analizar_pagina, generar_llms
 
 acceso = analizar_robots(open("robots.txt").read())
-print(acceso.bloqueados)   # {'GPTBot': 'OpenAI (entrenamiento)'}
+print(acceso.puntos_acceso)      # 18  (de 25, ponderado por motor)
+print(acceso.motores_sin_cita)   # ['Perplexity']  -> los que no pueden citarte
+
+chatgpt = acceso.motores["ChatGPT (OpenAI)"]
+print(chatgpt.estado, chatgpt.cita_bloqueada, chatgpt.puntos)   # parcial False 6.4
 
 llms = validar_llms(open("llms.txt").read())
 print(llms.valido, llms.problemas)
@@ -149,9 +180,10 @@ palabras: exactamente el problema que queremos detectar.
 pytest tests/ -v
 ```
 
-22 tests. Los de `robots.txt` cubren los casos que aparecen en producción:
+29 tests. Los de `robots.txt` cubren los casos que aparecen en producción:
 excepciones a bloqueos globales, varios agentes por grupo, comentarios en línea,
-`Disallow` parcial que no debe contar como bloqueo.
+`Disallow` parcial que no debe contar como bloqueo, y el desglose por motor
+(bloquear entrenamiento sin perder la cita, y al revés).
 
 ## Limitaciones
 
