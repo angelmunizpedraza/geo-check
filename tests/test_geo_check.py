@@ -247,5 +247,50 @@ def test_regla_propia_gana_al_comodin_en_el_desglose():
     assert "Perplexity" not in r.motores_sin_cita
 
 
+# --- puertas de CI -----------------------------------------------------------
+
+def _resultado(total, sin_cita=()):
+    return {"puntuacion": {"total": total}, "motores_que_no_pueden_citarte": list(sin_cita)}
+
+
+def test_min_score_falla_el_build_por_debajo_del_umbral(monkeypatch):
+    from geo_check import __main__ as m
+
+    monkeypatch.setattr(m, "ejecutar", lambda *a, **k: _resultado(40))
+    assert m.main(["https://ejemplo.com", "-q", "--min-score", "80"]) == 1
+
+
+def test_min_score_pasa_cuando_se_alcanza_el_umbral(monkeypatch):
+    from geo_check import __main__ as m
+
+    monkeypatch.setattr(m, "ejecutar", lambda *a, **k: _resultado(80))
+    assert m.main(["https://ejemplo.com", "-q", "--min-score", "80"]) == 0
+
+
+def test_sin_puertas_siempre_sale_cero(monkeypatch):
+    from geo_check import __main__ as m
+
+    monkeypatch.setattr(m, "ejecutar", lambda *a, **k: _resultado(3, ["ChatGPT (OpenAI)"]))
+    assert m.main(["https://ejemplo.com", "-q"]) == 0
+
+
+def test_fail_if_blocked_solo_salta_si_un_motor_no_puede_citarte(monkeypatch):
+    from geo_check import __main__ as m
+
+    monkeypatch.setattr(m, "ejecutar", lambda *a, **k: _resultado(95, ["ChatGPT (OpenAI)"]))
+    assert m.main(["https://ejemplo.com", "-q", "--fail-if-blocked"]) == 1
+
+    monkeypatch.setattr(m, "ejecutar", lambda *a, **k: _resultado(95))
+    assert m.main(["https://ejemplo.com", "-q", "--fail-if-blocked"]) == 0
+
+
+def test_una_puntuacion_alta_no_salva_a_un_motor_bloqueado(monkeypatch):
+    # El caso que motiva la puerta: 92/100 y aun asi ChatGPT no puede citarte.
+    from geo_check import __main__ as m
+
+    monkeypatch.setattr(m, "ejecutar", lambda *a, **k: _resultado(92, ["ChatGPT (OpenAI)"]))
+    assert m.main(["https://ejemplo.com", "-q", "--min-score", "80", "--fail-if-blocked"]) == 1
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
