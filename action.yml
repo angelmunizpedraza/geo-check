@@ -1,0 +1,88 @@
+name: geo-check
+description: Fail the build when an AI answer engine cannot reach, read or cite your site.
+author: Ángel Muñiz Pedraza
+
+branding:
+  icon: search
+  color: gray-dark
+
+inputs:
+  url:
+    description: Site to check, for example https://example.com
+    required: true
+  pages:
+    description: Extra URLs to analyse, separated by spaces or newlines.
+    required: false
+    default: ""
+  min-score:
+    description: Fail the step if the total score is below this (0-100). Empty reports without gating.
+    required: false
+    default: "70"
+  fail-if-blocked:
+    description: Fail the step if any engine cannot cite the site at all, whatever the score.
+    required: false
+    default: "true"
+  json:
+    description: Where to write the JSON report. Empty writes no JSON.
+    required: false
+    default: geo-check.json
+  python-version:
+    description: Python version used to run geo-check.
+    required: false
+    default: "3.12"
+  ref:
+    description: Git ref of geo-check to install. Defaults to the default branch.
+    required: false
+    default: ""
+
+outputs:
+  json:
+    description: Path to the JSON report that was written.
+    value: ${{ inputs.json }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install geo-check
+      shell: bash
+      env:
+        GC_REF: ${{ inputs.ref }}
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+        spec="git+https://github.com/angelmunizpedraza/geo-check"
+        if [ -n "${GC_REF}" ]; then
+          spec="${spec}@${GC_REF}"
+        fi
+        pip install "geo-check @ ${spec}"
+
+    - name: Run geo-check
+      shell: bash
+      env:
+        GC_URL: ${{ inputs.url }}
+        GC_PAGES: ${{ inputs.pages }}
+        GC_MIN: ${{ inputs.min-score }}
+        GC_BLOCKED: ${{ inputs.fail-if-blocked }}
+        GC_JSON: ${{ inputs.json }}
+      run: |
+        set -uo pipefail
+        args=("${GC_URL}")
+        for p in ${GC_PAGES}; do
+          args+=("$p")
+        done
+        if [ -n "${GC_JSON}" ]; then
+          args+=(--json "${GC_JSON}")
+        fi
+        if [ -n "${GC_MIN}" ]; then
+          args+=(--min-score "${GC_MIN}")
+        fi
+        if [ "${GC_BLOCKED}" = "true" ]; then
+          args+=(--fail-if-blocked)
+        fi
+        # Last command on purpose: its exit code becomes the step's exit code.
+        geo-check "${args[@]}"
