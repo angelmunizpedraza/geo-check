@@ -14,22 +14,75 @@ nadie audita el segundo.
 ## Instalación
 
 ```bash
+pip install "geo-check @ git+https://github.com/angelmunizpedraza/geo-check"
+```
+
+O para trabajar sobre el código:
+
+```bash
 git clone https://github.com/angelmunizpedraza/geo-check
 cd geo-check
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
 ## Uso
 
 ```bash
-python -m geo_check https://ejemplo.com
+geo-check https://ejemplo.com
 ```
 
 Analizar también páginas concretas:
 
 ```bash
-python -m geo_check https://ejemplo.com https://ejemplo.com/cursos https://ejemplo.com/blog/guia
+geo-check https://ejemplo.com https://ejemplo.com/cursos https://ejemplo.com/blog/guia
 ```
+
+(`python -m geo_check` sigue funcionando igual.)
+
+### Como puerta en CI
+
+```bash
+geo-check https://ejemplo.com --min-score 70 --fail-if-blocked --json geo-check.json
+```
+
+`--min-score N` devuelve 1 si la puntuación total baja de N. `--fail-if-blocked`
+devuelve 1 si algún motor no puede citarte, por muy alta que sea la nota: una web
+con 92/100 y `OAI-SearchBot` bloqueado sigue siendo invisible en ChatGPT, y eso no
+debería pasar un despliegue.
+
+### Como GitHub Action
+
+```yaml
+name: GEO check
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+jobs:
+  geo-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: angelmunizpedraza/geo-check@main
+        with:
+          url: https://ejemplo.com
+          min-score: "70"
+          fail-if-blocked: "true"
+```
+
+| Entrada | Por defecto | Qué hace |
+|---|---|---|
+| `url` | — | Sitio a comprobar. Obligatorio. |
+| `pages` | *(ninguna)* | URLs adicionales, separadas por espacios o saltos de línea. |
+| `min-score` | `70` | Falla si la puntuación total baja de esto. Cadena vacía = solo informa. |
+| `fail-if-blocked` | `true` | Falla si algún motor no puede citarte. |
+| `json` | `geo-check.json` | Dónde escribir el informe JSON. |
+| `python-version` | `3.12` | Python con el que se ejecuta. |
+| `ref` | *(rama por defecto)* | Ref de git de geo-check a instalar. |
+
+La CI de este repositorio ejecuta la propia action contra un sitio real en cada
+push, así que está probada y no solo documentada.
 
 ## Qué comprueba
 
