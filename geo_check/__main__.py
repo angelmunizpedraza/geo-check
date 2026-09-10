@@ -149,6 +149,14 @@ def main(argv=None) -> int:
     parser.add_argument("paginas", nargs="*", help="URLs adicionales a analizar")
     parser.add_argument("--json", metavar="RUTA", help="guardar resultado en JSON")
     parser.add_argument("-q", "--quiet", action="store_true")
+    parser.add_argument(
+        "--min-score", type=int, default=None, metavar="N",
+        help="salir con código 1 si la puntuación total baja de N (puerta para CI)",
+    )
+    parser.add_argument(
+        "--fail-if-blocked", action="store_true",
+        help="salir con código 1 si algún motor de IA no puede citarte",
+    )
     args = parser.parse_args(argv)
 
     resultado = ejecutar(args.url, args.paginas, quiet=args.quiet)
@@ -157,6 +165,20 @@ def main(argv=None) -> int:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump(resultado, fh, ensure_ascii=False, indent=2, default=str)
         print(f"JSON guardado en {args.json}")
+
+    # Puertas para CI. Se evalúan después de escribir el JSON para que el
+    # informe exista aunque el build falle.
+    fallos = []
+    total = resultado["puntuacion"]["total"]
+    if args.min_score is not None and total < args.min_score:
+        fallos.append(f"puntuación {total}/100 por debajo del mínimo exigido ({args.min_score})")
+    sin_cita = resultado.get("motores_que_no_pueden_citarte") or []
+    if args.fail_if_blocked and sin_cita:
+        fallos.append("motores que no pueden citarte: " + ", ".join(sin_cita))
+    if fallos:
+        for f in fallos:
+            print(f"geo-check: FALLO — {f}", file=sys.stderr)
+        return 1
     return 0
 
 
