@@ -1,5 +1,9 @@
 # geo-check
 
+[![CI](https://github.com/angelmunizpedraza/geo-check/actions/workflows/ci.yml/badge.svg)](https://github.com/angelmunizpedraza/geo-check/actions)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+
 Comprueba si un sitio web está preparado para que lo lean, entiendan y citen los
 buscadores generativos: ChatGPT, Perplexity, Claude, Google AI Overviews.
 
