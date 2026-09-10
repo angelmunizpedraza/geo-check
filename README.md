@@ -64,7 +64,7 @@ jobs:
   geo-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: angelmunizpedraza/geo-check@main
+      - uses: angelmunizpedraza/geo-check@v1
         with:
           url: https://ejemplo.com
           min-score: "70"
